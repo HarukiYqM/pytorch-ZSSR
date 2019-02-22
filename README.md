@@ -1,3 +1,17 @@
+# Pytorch implementation of "Zero-Shot" Super-Resolution using Deep Internal Learning  (ZSSR)
+### modified form  Assaf Shocher
+
+----------
+The principle of this pytorch verison is "change as little as possible", so most of the code are from Assaf Shocher. Thanks Shocher, I really love this exciting paper.
+----------
+I add an cuda flag at config.py, if you want to use cpu, pls set it to False.
+
+
+
+### below are original readme from Assaf.
+
+----------
+
 # "Zero-Shot" Super-Resolution using Deep Internal Learning  (ZSSR)
 ### Official implementation for paper by: Assaf Shocher, Nadav Cohen, Michal Irani
 
