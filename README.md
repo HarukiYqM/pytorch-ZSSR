@@ -2,7 +2,7 @@
 ### modified form  Assaf Shocher
 
 ----------
-The principle of this pytorch version is "changing as little as possible", so most of the code are from Assaf Shocher. Thanks Shocher, I really love this exciting paper:)
+All augmentation are included. The principle of this pytorch version is "changing as little as possible", so most of the code are from Assaf Shocher. Thanks Shocher, I really love this exciting paper:) 
 ----------
 I add an cuda flag at config.py, if you want to use cpu, pls set it to False.
 
