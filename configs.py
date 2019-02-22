@@ -3,7 +3,7 @@ import os
 
 class Config:
     # network meta params
-    python_path = '/home/assafsho/PycharmProjects/network/venv/bin/python2.7'
+    python_path = '/home/yiqunm2/tensorflow/bin/python'
     scale_factors = [[2.0, 2.0]]  # list of pairs (vertical, horizontal) for gradual increments in resolution
     base_change_sfs = []  # list of scales after which the input is changed to be the output (recommended for high sfs)
     max_iters = 3000
@@ -22,7 +22,7 @@ class Config:
     crop_size = 128
     noise_std = 0.0  # adding noise to lr-sons. small for real images, bigger for noisy images and zero for ideal case
     init_net_for_each_sf = False  # for gradual sr- should we optimize from the last sf or initialize each time?
-
+    cuda = True
     # Params concerning learning rate policy
     learning_rate = 0.001
     learning_rate_change_ratio = 1.5  # ratio between STD and slope of linear fit, under which lr is reduced

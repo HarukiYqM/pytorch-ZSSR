@@ -1,10 +1,11 @@
-import tensorflow as tf
+import torch.nn as nn
+import torch
 import matplotlib.pyplot as plt
 import matplotlib.image as img
 from matplotlib.gridspec import GridSpec
 from configs import Config
 from utils import *
-
+from simplenet import simpleNet
 
 class ZSSR:
     # Basic current state variables initialization / declaration
@@ -55,30 +56,33 @@ class ZSSR:
     hr_father_image_space = None
     out_image_space = None
 
-    # Tensorflow graph default
-    sess = None
 
     def __init__(self, input_img, conf=Config(), ground_truth=None, kernels=None):
         # Acquire meta parameters configuration from configuration class as a class variable
         self.conf = conf
-
+        self.cuda = conf.cuda
         # Read input image (can be either a numpy array or a path to an image file)
         self.input = input_img if type(input_img) is not str else img.imread(input_img)
-
+        self.Y = False
+        if len(self.input)==2:
+            self.Y = True
+        #input is ndarray
         # For evaluation purposes, ground-truth image can be supplied.
         self.gt = ground_truth if type(ground_truth) is not str else img.imread(ground_truth)
-
+        #gt is ndarray
         # Preprocess the kernels. (see function to see what in includes).
         self.kernels = preprocess_kernels(kernels, conf)
-
+        #downsample kernel custom
         # Prepare TF default computational graph
-        self.model = tf.Graph()
+        # declare model here severs as initial model
+        print(self.Y)
+        self.model = simpleNet(self.Y)
 
         # Build network computational graph
-        self.build_network(conf)
+        #self.build_network(conf)
 
         # Initialize network weights and meta parameters
-        self.init_sess(init_weights=True)
+        self.init_parameters()
 
         # The first hr father source is the input (source goes through augmentation to become a father)
         # Later on, if we use gradual sr increments, results for intermediate scales will be added as sources.
@@ -92,18 +96,25 @@ class ZSSR:
         # Run gradually on all scale factors (if only one jump then this loop only happens once)
         for self.sf_ind, (sf, self.kernel) in enumerate(zip(self.conf.scale_factors, self.kernels)):
             # verbose
-            print '** Start training for sf=', sf, ' **'
+            print('** Start training for sf=', sf, ' **')
 
             # Relative_sf (used when base change is enabled. this is when input is the output of some previous scale)
+            # safe
             if np.isscalar(sf):
                 sf = [sf, sf]
             self.sf = np.array(sf) / np.array(self.base_sf)
             self.output_shape = np.uint(np.ceil(np.array(self.input.shape[0:2]) * sf))
-
+            print('input shape',self.input.shape)
             # Initialize network
-            self.init_sess(init_weights=self.conf.init_net_for_each_sf)
+            # reinit all for each scale factors, each gradual level
+            self.init_parameters()
+            if self.conf.init_net_for_each_sf == True:
+                self.model = simpleNet(self.Y)
+            if self.cuda:
+                self.model = self.model.cuda()
 
             # Train the network
+            # should be modified
             self.train()
 
             # Use augmented outputs and back projection to enhance result. Also save the result.
@@ -124,68 +135,20 @@ class ZSSR:
                            post_processed_output, vmin=0, vmax=1)
 
             # verbose
-            print '** Done training for sf=', sf, ' **'
+            print('** Done training for sf=', sf, ' **')
 
         # Return the final post processed output.
         # noinspection PyUnboundLocalVariable
         return post_processed_output
 
-    def build_network(self, meta):
-        with self.model.as_default():
+  
 
-            # Learning rate tensor
-            self.learning_rate_t = tf.placeholder(tf.float32, name='learning_rate')
-
-            # Input image
-            self.lr_son_t = tf.placeholder(tf.float32, name='lr_son')
-
-            # Ground truth (supervision)
-            self.hr_father_t = tf.placeholder(tf.float32, name='hr_father')
-
-            # Filters
-            self.filters_t = [tf.get_variable(shape=meta.filter_shape[ind], name='filter_%d' % ind,
-                                              initializer=tf.random_normal_initializer(
-                                                  stddev=np.sqrt(meta.init_variance/np.prod(
-                                                      meta.filter_shape[ind][0:3]))))
-                              for ind in range(meta.depth)]
-
-            # Activate filters on layers one by one (this is just building the graph, no calculation is done here)
-            self.layers_t = [self.lr_son_t] + [None] * meta.depth
-            for l in range(meta.depth - 1):
-                self.layers_t[l + 1] = tf.nn.relu(tf.nn.conv2d(self.layers_t[l], self.filters_t[l],
-                                                               [1, 1, 1, 1], "SAME", name='layer_%d' % (l + 1)))
-
-            # Last conv layer (Separate because no ReLU here)
-            l = meta.depth - 1
-            self.layers_t[-1] = tf.nn.conv2d(self.layers_t[l], self.filters_t[l],
-                                             [1, 1, 1, 1], "SAME", name='layer_%d' % (l + 1))
-
-            # Output image (Add last conv layer result to input, residual learning with global skip connection)
-            self.net_output_t = self.layers_t[-1] + self.conf.learn_residual * self.lr_son_t
-
-            # Final loss (L1 loss between label and output layer)
-            self.loss_t = tf.reduce_mean(tf.reshape(tf.abs(self.net_output_t - self.hr_father_t), [-1]))
-
-            # Apply adam optimizer
-            self.train_op = tf.train.AdamOptimizer(learning_rate=self.learning_rate_t).minimize(self.loss_t)
-            self.init_op = tf.initialize_all_variables()
-
-    def init_sess(self, init_weights=True):
+    def init_parameters(self):
         # Sometimes we only want to initialize some meta-params but keep the weights as they were
-        if init_weights:
-
-            # These are for GPU consumption, preventing TF to catch all available GPUs
-            config = tf.ConfigProto()
-            config.gpu_options.allow_growth = True
-
-            # Initialize computational graph session
-            self.sess = tf.Session(graph=self.model, config=config)
-
-            # Initialize weights
-            self.sess.run(self.init_op)
-
+        # no need to init weight, done as model declaration
         # Initialize all counters etc
-        self.loss = [None] * self.conf.max_iters
+        #no need to change. For record here
+        self.loss = [None] * self.conf.max_iters 
         self.mse, self.mse_rec, self.interp_mse, self.interp_rec_mse, self.mse_steps = [], [], [], [], []
         self.iter = 0
         self.learning_rate = self.conf.learning_rate
@@ -195,6 +158,8 @@ class ZSSR:
         # This only happens if there exists ground-truth and sf is not the last one (or too close to it).
         # We use imresize with both scale and output-size, see comment in forward_backward_pass.
         # noinspection PyTypeChecker
+        # scale_factor[-1] means the ground truth
+        # hence sf/conf.scale_factors[-1] = 1.5/2, the target size for gt.
         self.gt_per_sf = (imresize(self.gt,
                                    scale_factor=self.sf / self.conf.scale_factors[-1],
                                    output_shape=self.output_shape,
@@ -204,41 +169,57 @@ class ZSSR:
                               np.any(np.abs(self.sf - self.conf.scale_factors[-1]) > 0.01))
                           else self.gt)
 
-    def forward_backward_pass(self, lr_son, hr_father):
+    def forward_backward_pass(self, lr_son, hr_father,criterion,optimizer):
         # First gate for the lr-son into the network is interpolation to the size of the father
         # Note: we specify both output_size and scale_factor. best explained by example: say father size is 9 and sf=2,
         # small_son size is 4. if we upscale by sf=2 we get wrong size, if we upscale to size 9 we get wrong sf.
         # The current imresize implementation supports specifying both.
         interpolated_lr_son = imresize(lr_son, self.sf, hr_father.shape, self.conf.upscale_method)
+        if self.Y == True:
+            lr_son_input = torch.Tensor(interpolated_lr_son).unsqueeze_(0).unsqueeze_(0)
+            hr_father = torch.Tensor(hr_father).unsqueeze_(0).unsqueeze_(0)
+        else:
+            lr_son_input = torch.Tensor(interpolated_lr_son).permute(2,0,1).unsqueeze_(0)
+            hr_father = torch.Tensor(hr_father).permute(2,0,1).unsqueeze_(0)
+        lr_son_input = lr_son_input.requires_grad_()
+        
+        if self.cuda == True:
+            hr_father = hr_father.cuda()
+            lr_son_input = lr_son_input.cuda()
+      
+        train_output = self.model(lr_son_input)
+        loss = criterion(hr_father,train_output)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        self.loss[self.iter] = loss
 
-        # Create feed dict
-        feed_dict = {'learning_rate:0': self.learning_rate,
-                     'lr_son:0': np.expand_dims(interpolated_lr_son, 0),
-                     'hr_father:0': np.expand_dims(hr_father, 0)}
-
-        # Run network
-        _, self.loss[self.iter], train_output = self.sess.run([self.train_op, self.loss_t, self.net_output_t],
-                                                              feed_dict)
-        return np.clip(np.squeeze(train_output), 0, 1)
+        return np.clip(np.squeeze(train_output.cpu().detach().numpy()), 0, 1)
 
     def forward_pass(self, lr_son, hr_father_shape=None):
         # First gate for the lr-son into the network is interpolation to the size of the father
         interpolated_lr_son = imresize(lr_son, self.sf, hr_father_shape, self.conf.upscale_method)
-
+        if self.Y == True:
+            interpolated_lr_son = (torch.Tensor(interpolated_lr_son)).unsqueeze_(0).unsqueeze_(0)
+        else:
+            interpolated_lr_son = (torch.Tensor(interpolated_lr_son).permute(2,0,1)).unsqueeze_(0)
+        if self.cuda:
+            interpolated_lr_son = interpolated_lr_son.cuda()
         # Create feed dict
-        feed_dict = {'lr_son:0': np.expand_dims(interpolated_lr_son, 0)}
+        
 
         # Run network
-        return np.clip(np.squeeze(self.sess.run([self.net_output_t], feed_dict)), 0, 1)
+        return np.clip(np.squeeze(self.model(interpolated_lr_son).cpu().detach().permute(0,2,3,1).numpy()), 0, 1)
 
     def learning_rate_policy(self):
         # fit linear curve and check slope to determine whether to do nothing, reduce learning rate or finish
         if (not (1 + self.iter) % self.conf.learning_rate_policy_check_every
                 and self.iter - self.learning_rate_change_iter_nums[-1] > self.conf.min_iters):
             # noinspection PyTupleAssignmentBalance
-            [slope, _], [[var, _], _] = np.polyfit(self.mse_steps[-(self.conf.learning_rate_slope_range /
+            #print(self.conf.run_test_every)
+            [slope, _], [[var, _], _] = np.polyfit(self.mse_steps[-(self.conf.learning_rate_slope_range //
                                                                     self.conf.run_test_every):],
-                                                   self.mse_rec[-(self.conf.learning_rate_slope_range /
+                                                   self.mse_rec[-(self.conf.learning_rate_slope_range //
                                                                   self.conf.run_test_every):],
                                                    1, cov=True)
 
@@ -246,12 +227,12 @@ class ZSSR:
             std = np.sqrt(var)
 
             # Verbose
-            print 'slope: ', slope, 'STD: ', std
+            print('slope: ', slope, 'STD: ', std)
 
             # Determine learning rate maintaining or reduction by the ration between slope and noise
             if -self.conf.learning_rate_change_ratio * slope < std:
                 self.learning_rate /= 10
-                print "learning rate updated: ", self.learning_rate
+                print("learning rate updated: ", self.learning_rate)
 
                 # Keep track of learning rate changes for plotting purposes
                 self.learning_rate_change_iter_nums.append(self.iter)
@@ -283,16 +264,19 @@ class ZSSR:
 
         # Display test results if indicated
         if self.conf.display_test_results:
-            print 'iteration: ', self.iter, 'reconstruct mse:', self.mse_rec[-1], ', true mse:', (self.mse[-1]
-                                                                                                  if self.mse else None)
+            print('iteration: ', self.iter, 'reconstruct mse:', self.mse_rec[-1], ', true mse:', (self.mse[-1]
+                                                                                                  if self.mse else None))
 
         # plot losses if needed
         if self.conf.plot_losses:
             self.plot()
 
     def train(self):
+        #def loss and optimizer
+        criterion = nn.MSELoss()
+        optimizer = torch.optim.Adam(self.model.parameters(),lr = self.learning_rate)
         # main training loop
-        for self.iter in xrange(self.conf.max_iters):
+        for self.iter in range(self.conf.max_iters):
             # Use augmentation from original input image to create current father.
             # If other scale factors were applied before, their result is also used (hr_fathers_in)
             self.hr_father = random_augment(ims=self.hr_fathers_sources,
@@ -308,13 +292,15 @@ class ZSSR:
 
             # Get lr-son from hr-father
             self.lr_son = self.father_to_son(self.hr_father)
+            #should convert input and output to torch tensor
 
+            
             # run network forward and back propagation, one iteration (This is the heart of the training)
-            self.train_output = self.forward_backward_pass(self.lr_son, self.hr_father)
+            self.train_output = self.forward_backward_pass(self.lr_son, self.hr_father,criterion,optimizer)
 
             # Display info and save weights
             if not self.iter % self.conf.display_every:
-                print 'sf:', self.sf*self.base_sf, ', iteration: ', self.iter, ', loss: ', self.loss[self.iter]
+                print('sf:', self.sf*self.base_sf, ', iteration: ', self.iter, ', loss: ', self.loss[self.iter])
 
             # Test network
             if self.conf.run_test and (not self.iter % self.conf.run_test_every):
@@ -389,7 +375,7 @@ class ZSSR:
                 # Keeping track- this is the index inside the base scales list (provided in the config)
                 self.base_ind += 1
 
-            print 'base changed to %.2f' % self.base_sf
+            print('base changed to %.2f' % self.base_sf)
 
     def plot(self):
         plots_data, labels = zip(*[(np.array(x), l) for (x, l)
